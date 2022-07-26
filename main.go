@@ -22,33 +22,35 @@ type Process struct {
 }
 
 func main() {
-	plist := []int{}
 	pids, _ := process.Pids()
 	for _, pid := range pids {
-		p := GetProcessList(int(pid), "")
-		logrus.Info(p)
-		logrus.Print(plist)
+		GetProcessList(int(pid), "")
 	}
 }
 
-func GetProcessList(pid int, parentuid string) *Process {
+func GetProcessList(pid int, parentuid string) {
 	p, err := process.NewProcess(int32(pid))
 	if err != nil {
 		logrus.Warn(err)
+		return
 	}
 	currentctime, _ := p.CreateTime()
 	currentUuid := CalcMD5(p.Pid, currentctime)
+	if parentuid == "" && QueryProcess(currentUuid) != nil {
+		logrus.Info("node exist Ignore... ", currentUuid)
+		return
+	}
 	currentCmdline, _ := p.Cmdline()
 	currentExe, _ := p.Exe()
 
 	ppid, err := p.Ppid()
 	if err != nil || ppid == 0 {
 		logrus.Warn(err)
-		return &Process{UUID: string(currentUuid[:]), Pid: pid, Ppid: 0, Parent: nil, Cmdline: currentCmdline}
+		return
 	}
 	logrus.Info("Found parent ", ppid)
 	pp := Process{
-		Uid:     "_:" + currentUuid[:],
+		Uid:     parentuid,
 		UUID:    currentUuid[:],
 		Pid:     pid,
 		Ppid:    int(ppid),
@@ -57,18 +59,21 @@ func GetProcessList(pid int, parentuid string) *Process {
 		DType:   []string{"Process"},
 	}
 
-	parent, _ := process.NewProcess(ppid)
+	parent, err := process.NewProcess(ppid)
+	if err != nil {
+		logrus.Warn(err)
+		return
+	}
 	parentctime, _ := parent.CreateTime()
 	parentUuid := CalcMD5(ppid, parentctime)
 
 	if cachep := QueryProcess(parentUuid); cachep != nil {
-		pp.Uid = parentuid
 		logrus.Info("Found exist process object ", cachep.Uid)
 		pp.Parent = []Process{}
 		pp.Parent = append(pp.Parent, *cachep)
 		SetObject(pp)
 		logrus.Info(p.Pid, parentctime, parent.Pid, "???", pp.UUID, " ", pp.Parent[0].UUID)
-		return &pp
+		return
 	}
 	parentCmdline, _ := parent.Cmdline()
 	parentPpid, _ := parent.Ppid()
@@ -84,15 +89,11 @@ func GetProcessList(pid int, parentuid string) *Process {
 			DType:   []string{"Process"},
 		},
 	}
-	if parentUuid != "" {
-		pp.Uid = parentuid
-	}
 	logrus.Info(p.Pid, parentctime, parent.Pid, "???", pp.UUID, " ", pp.Parent[0].UUID)
 	resp := SetObject(pp)
 	puid := resp[string(parentuid[:])]
 	logrus.Debug("Parent uid: ", puid)
 	GetProcessList(int(ppid), puid)
-	return &pp
 }
 
 func CalcMD5(pid int32, time int64) string {
