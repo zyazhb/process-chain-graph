@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"crypto/md5"
 	"encoding/hex"
-	"os"
 	"strconv"
 
 	"github.com/shirou/gopsutil/v3/process"
@@ -23,19 +22,16 @@ type Process struct {
 }
 
 func main() {
-	// plist := []int{}
-	// pids, _ := process.Pids()
-	// for pid := range pids {
-	// 	p := GetProcessList(pid)
-	// 	logrus.Info(p)
-	// 	logrus.Print(plist)
-	// }
-	GetProcessList(os.Getpid(), "")
+	plist := []int{}
+	pids, _ := process.Pids()
+	for _, pid := range pids {
+		p := GetProcessList(int(pid), "")
+		logrus.Info(p)
+		logrus.Print(plist)
+	}
 }
 
 func GetProcessList(pid int, parentuid string) *Process {
-	// *plist = append(*plist, pid)
-	// logrus.Info(plist)
 	p, err := process.NewProcess(int32(pid))
 	if err != nil {
 		logrus.Warn(err)
