@@ -86,3 +86,34 @@ func SetObject(p Process) map[string]string {
 	logrus.Info(response)
 	return response.Uids
 }
+
+func QueryProcess(uuid string) *Process {
+	dg, cancel := getDgraphClient()
+	defer cancel()
+	variables := make(map[string]string)
+	variables["$id"] = uuid
+	const q = `query process($id: string){
+		Process(func: eq(uuid,$id)) {
+			uid
+			uuid
+			pid
+			ppid
+			cmdline
+			exe
+			dgraph.type
+			}
+		}`
+	ctx := context.Background()
+	resp, err := dg.NewTxn().QueryWithVars(ctx, q, variables)
+	if err != nil {
+		log.Fatal(err)
+	}
+	var p struct {
+		Process []Process `json:"process"`
+	}
+	json.Unmarshal(resp.Json, &p)
+	if len(p.Process) == 0 {
+		return nil
+	}
+	return &p.Process[0]
+}
