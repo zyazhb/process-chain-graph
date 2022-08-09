@@ -1,103 +1,86 @@
 package main
 
 import (
-	"bytes"
-	"crypto/md5"
-	"encoding/hex"
-	"strconv"
+	"context"
+	"fmt"
+	"os"
 
-	"github.com/shirou/gopsutil/v3/process"
+	"github.com/neo4j/neo4j-go-driver/v5/neo4j"
+	"github.com/shirou/gopsutil/process"
 	"github.com/sirupsen/logrus"
 )
 
+func main() {
+	// Neo4j 4.0, defaults to no TLS therefore use bolt:// or neo4j://
+	// Neo4j 3.5, defaults to self-signed certificates, TLS on, therefore use bolt+ssc:// or neo4j+ssc://
+	ctx := context.Background()
+	dbUri := "neo4j://localhost:7687"
+	driver, err := neo4j.NewDriverWithContext(dbUri, neo4j.BasicAuth("neo4j", os.Args[1], ""))
+	if err != nil {
+		panic(err)
+	}
+	defer driver.Close(ctx)
+	item, err := insertItem(ctx, driver)
+	if err != nil {
+		panic(err)
+	}
+	fmt.Printf("%v\n", item)
+}
+
+func insertItem(ctx context.Context, driver neo4j.DriverWithContext) (*Process, error) {
+	session := driver.NewSession(ctx, neo4j.SessionConfig{})
+	defer session.Close(ctx)
+	result, err := session.ExecuteWrite(ctx, createItemFn)
+	if err != nil {
+		return nil, err
+	}
+	return result.(*Process), nil
+}
+
+func createItemFn(tx neo4j.ManagedTransaction) (interface{}, error) {
+	pids, _ := process.Pids()
+	for _, pid := range pids {
+		p, err := process.NewProcess(pid)
+		if err != nil {
+			logrus.Warn(err)
+			continue
+		}
+		name, _ := p.Name()
+		ppid, _ := p.Ppid()
+		createTime, _ := p.CreateTime()
+		cmdline, _ := p.Cmdline()
+		exe, _ := p.Exe()
+		records, err := tx.Run(context.Background(), "CREATE (n:Process { id:$id, name:$name, pid: $pid, ppid: $ppid, cmdline: $cmdline, Exe: $exe}) RETURN n.id, n.name",
+			map[string]interface{}{
+				"id":         name,
+				"name":       name,
+				"pid":        p.Pid,
+				"ppid":       ppid,
+				"createtime": createTime,
+				"exe":        exe,
+				"cmdline":    cmdline,
+			})
+		if err != nil {
+			return nil, err
+		}
+		record, err := records.Single(context.TODO())
+		if err != nil {
+			return nil, err
+		}
+		_ = record
+	}
+	tx.Run(context.Background(), "MATCH (p:Process),(pp:Process) WHERE p.ppid = pp.pid CREATE (p)-[:CHILD_OF]->(pp)", nil)
+	return &Process{}, nil
+}
+
 type Process struct {
-	Uid     string    `json:"uid,omitempty"`
-	UUID    string    `json:"uuid,omitempty"`
+	UUID    string `json:"uuid,omitempty"`
+	Name    string
 	Pid     int       `json:"pid,omitempty"`
 	Ppid    int       `json:"ppid,omitempty"`
 	Cmdline string    `json:"cmdline,omitempty"`
 	Parent  []Process `json:"process,omitempty"`
 	Exe     string    `json:"exe,omitempty"`
-	DType   []string  `json:"dgraph.type,omitempty"`
 }
 
-func main() {
-	pids, _ := process.Pids()
-	for _, pid := range pids {
-		GetProcessList(int(pid), "")
-	}
-}
-
-func GetProcessList(pid int, parentuid string) {
-	p, err := process.NewProcess(int32(pid))
-	if err != nil {
-		logrus.Warn(err)
-		return
-	}
-	currentctime, _ := p.CreateTime()
-	currentUuid := CalcMD5(p.Pid, currentctime)
-	if parentuid == "" && QueryProcess(currentUuid) != nil {
-		logrus.Info("node exist Ignore... ", currentUuid)
-		return
-	}
-	currentCmdline, _ := p.Cmdline()
-	currentExe, _ := p.Exe()
-
-	ppid, err := p.Ppid()
-	if err != nil || ppid == 0 {
-		logrus.Warn(err)
-		return
-	}
-	logrus.Info("Found parent ", ppid)
-	pp := Process{
-		Uid:     parentuid,
-		UUID:    currentUuid[:],
-		Pid:     pid,
-		Ppid:    int(ppid),
-		Exe:     currentExe,
-		Cmdline: currentCmdline,
-		DType:   []string{"Process"},
-	}
-
-	parent, err := process.NewProcess(ppid)
-	if err != nil {
-		logrus.Warn(err)
-		return
-	}
-	parentctime, _ := parent.CreateTime()
-	parentUuid := CalcMD5(ppid, parentctime)
-
-	if cachep := QueryProcess(parentUuid); cachep != nil {
-		logrus.Info("Found exist process object ", cachep.Uid)
-		pp.Parent = []Process{}
-		pp.Parent = append(pp.Parent, *cachep)
-		SetObject(pp)
-		logrus.Info(p.Pid, parentctime, parent.Pid, "???", pp.UUID, " ", pp.Parent[0].UUID)
-		return
-	}
-	parentCmdline, _ := parent.Cmdline()
-	parentPpid, _ := parent.Ppid()
-	parentExe, _ := parent.Exe()
-	pp.Parent = []Process{
-		{
-			Uid:     "_:" + parentuid,
-			UUID:    string(parentUuid[:]),
-			Pid:     int(parent.Pid),
-			Ppid:    int(parentPpid),
-			Exe:     parentExe,
-			Cmdline: parentCmdline,
-			DType:   []string{"Process"},
-		},
-	}
-	logrus.Info(p.Pid, parentctime, parent.Pid, "???", pp.UUID, " ", pp.Parent[0].UUID)
-	resp := SetObject(pp)
-	puid := resp[string(parentuid[:])]
-	logrus.Debug("Parent uid: ", puid)
-	GetProcessList(int(ppid), puid)
-}
-
-func CalcMD5(pid int32, time int64) string {
-	data := bytes.NewBufferString(strconv.Itoa(int(time)) + strconv.Itoa(int(pid)))
-	tmp := md5.Sum(data.Bytes())
-	return hex.EncodeToString(tmp[:])
-}
+// MATCH (n) DETACH DELETE n
