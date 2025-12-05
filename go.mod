@@ -5,7 +5,7 @@ go 1.18
 require (
 	github.com/neo4j/neo4j-go-driver/v5 v5.0.0-preview.0.20220804090037-7062e9d63005
 	github.com/shirou/gopsutil v3.21.11+incompatible
-	github.com/sirupsen/logrus v1.9.0
+	github.com/sirupsen/logrus v1.9.1
 	github.com/surrealdb/surrealdb.go v0.2.1
 )
 
